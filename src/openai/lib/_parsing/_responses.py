@@ -19,6 +19,7 @@ from ...types.responses import (
     ParsedContent,
     ParsedResponse,
     FunctionToolParam,
+    NamespaceToolParam,
     ParsedResponseOutputItem,
     ParsedResponseOutputText,
     ResponseFunctionToolCall,
@@ -168,7 +169,27 @@ def parse_text(text: str, text_format: type[TextFormatT] | Omit, *, phase: str |
     raise TypeError(f"Unable to automatically parse response format type {text_format}")
 
 
-def get_input_tool_by_name(*, input_tools: Iterable[ToolParam], name: str) -> FunctionToolParam | None:
+def get_input_tool_by_name(
+    *,
+    input_tools: Iterable[ToolParam],
+    name: str,
+    namespace: str | None = None,
+) -> FunctionToolParam | None:
+    if namespace is not None:
+        # A namespaced function call must be resolved against the tools declared
+        # inside the matching `namespace` tool only — never against a top-level
+        # tool that happens to share the same name.
+        for tool in input_tools:
+            if tool["type"] != "namespace" or tool.get("name") != namespace:
+                continue
+
+            nested_tools = cast(NamespaceToolParam, tool).get("tools") or []
+            for nested in nested_tools:
+                if nested.get("type") == "function" and nested.get("name") == name:
+                    return cast(FunctionToolParam, nested)
+
+        return None
+
     for tool in input_tools:
         if tool["type"] == "function" and tool.get("name") == name:
             return tool
@@ -184,7 +205,11 @@ def parse_function_tool_arguments(
     if input_tools is None or not is_given(input_tools):
         return None
 
-    input_tool = get_input_tool_by_name(input_tools=input_tools, name=function_call.name)
+    input_tool = get_input_tool_by_name(
+        input_tools=input_tools,
+        name=function_call.name,
+        namespace=function_call.namespace,
+    )
     if not input_tool:
         return None
 
